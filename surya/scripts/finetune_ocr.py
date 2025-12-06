@@ -217,7 +217,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=dataset,
-        data_collator=collator,
+        data_collator=collator
     )
 
     trainer.train()
