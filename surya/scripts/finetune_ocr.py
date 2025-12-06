@@ -33,7 +33,7 @@ OCR_MAX_IMAGE_SIZE = (1024, 512)
 class SuryaOCRDataset(torch.utils.data.Dataset):
     def __init__(self, processor: SuryaOCRProcessor, data_args: SuryaOCRDataArguments):
         super().__init__()
-        self.hf_dataset = load_dataset(data_args.dataset_name, num_proc=data_args.num_loading_proc)
+        self.hf_dataset = load_dataset(data_args.dataset_name, num_proc=data_args.num_loading_proc, split="train")
         self.processor = processor
 
     def __len__(self):
@@ -210,17 +210,13 @@ def main():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     model, processor = load_model_and_processor(model_args.pretrained_checkpoint_path)
-    train_dataset = SuryaOCRDataset(processor, data_args)
+    dataset = SuryaOCRDataset(processor, data_args)
     collator = SuryaOCRDataCollator(model, processor, data_args, encoder_chunk_size=32768)
-
-    # Create compute_metrics function with processor bound
-    def compute_metrics_fn(eval_pred):
-        return compute_metrics(eval_pred, processor)
 
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
+        train_dataset=dataset,
         data_collator=collator,
     )
 
