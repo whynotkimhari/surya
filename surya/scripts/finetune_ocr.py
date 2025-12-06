@@ -5,9 +5,6 @@ from datasets import load_dataset
 import numpy as np
 import torch
 import warnings
-from jiwer import cer
-from Levenshtein import distance as levenshtein_distance
-from sacrebleu import corpus_bleu
 from transformers import (
     HfArgumentParser,
     TrainingArguments,
@@ -36,7 +33,7 @@ OCR_MAX_IMAGE_SIZE = (1024, 512)
 class SuryaOCRDataset(torch.utils.data.Dataset):
     def __init__(self, processor: SuryaOCRProcessor, data_args: SuryaOCRDataArguments):
         super().__init__()
-        self.hf_dataset = load_dataset(data_args.dataset_name, data_args.subset, num_proc=data_args.num_loading_proc, split=data_args.split)
+        self.hf_dataset = load_dataset(data_args.dataset_name, num_proc=data_args.num_loading_proc)
         self.processor = processor
 
     def __len__(self):
@@ -190,73 +187,6 @@ class SuryaOCRDataCollator:
 
         return processed_batch
 
-def compute_metrics(eval_pred, processor):
-    """
-    Compute OCR-specific metrics: CER, Edit Distance, and BLEU
-    
-    Args:
-        eval_pred: EvalPrediction object with predictions and label_ids
-        processor: SuryaOCRProcessor for decoding
-    
-    Returns:
-        Dict with cer, avg_edit_distance, and bleu scores
-    """
-    predictions, labels = eval_pred
-    
-    # predictions shape: [batch, seq_len, vocab_size]
-    # Get predicted token IDs (argmax over vocabulary)
-    if isinstance(predictions, tuple):
-        predictions = predictions[0]
-    pred_ids = np.argmax(predictions, axis=-1)
-    
-    # Decode predictions and labels to text
-    pred_texts = []
-    label_texts = []
-    
-    for pred_seq, label_seq in zip(pred_ids, labels):
-        # Remove padding and special tokens for prediction
-        pred_seq_clean = pred_seq[pred_seq != processor.pad_token_id]
-        
-        # For labels, keep only non-masked positions (not -100)
-        valid_label_positions = label_seq != -100
-        label_seq_clean = label_seq[valid_label_positions]
-        
-        # Decode to text (skip special tokens for cleaner comparison)
-        try:
-            pred_text = processor.tokenizer.decode(pred_seq_clean, skip_special_tokens=True)
-            label_text = processor.tokenizer.decode(label_seq_clean, skip_special_tokens=True)
-        except:
-            # Fallback if tokenizer decode fails
-            pred_text = ""
-            label_text = ""
-        
-        pred_texts.append(pred_text)
-        label_texts.append(label_text)
-    
-    # Compute CER (Character Error Rate)
-    try:
-        character_error_rate = cer(label_texts, pred_texts)
-    except:
-        character_error_rate = 1.0  # Fallback if CER computation fails
-    
-    # Compute average Edit Distance (Levenshtein distance)
-    edit_distances = [levenshtein_distance(gt, pred) for gt, pred in zip(label_texts, pred_texts)]
-    avg_edit_distance = np.mean(edit_distances) if edit_distances else 0.0
-    
-    # Compute BLEU score
-    try:
-        # BLEU expects list of references (each reference is a list)
-        references = [[text] for text in label_texts]
-        bleu = corpus_bleu(pred_texts, references).score
-    except:
-        bleu = 0.0  # Fallback if BLEU computation fails
-    
-    return {
-        "cer": character_error_rate,
-        "avg_edit_distance": avg_edit_distance,
-        "bleu": bleu,
-    }
-
 def load_model_and_processor(checkpoint_path: Optional[str] = None) -> Tuple[SuryaModel, SuryaOCRProcessor]:
     foundation_predictor = FoundationPredictor(checkpoint=checkpoint_path)
     return foundation_predictor.model, foundation_predictor.processor
@@ -270,8 +200,6 @@ class SuryaOCRDataArguments:
     dataset_name: str = field(default="datalab-to/ocr_finetune_example")
     num_loading_proc: int = field(default=16)
     max_sequence_length: Optional[int] = field(default=None)
-    subset: str = field(default="default")
-    split: str = field(default="train")
 
 @dataclass
 class SuryaOCRTrainingArguments(TrainingArguments):
@@ -283,8 +211,6 @@ def main():
 
     model, processor = load_model_and_processor(model_args.pretrained_checkpoint_path)
     train_dataset = SuryaOCRDataset(processor, data_args)
-    data_args.split = 'validation'
-    eval_dataset = SuryaOCRDataset(processor, data_args)
     collator = SuryaOCRDataCollator(model, processor, data_args, encoder_chunk_size=32768)
 
     # Create compute_metrics function with processor bound
@@ -295,9 +221,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
         data_collator=collator,
-        compute_metrics=compute_metrics_fn,  # Add metrics computation
     )
 
     trainer.train()
